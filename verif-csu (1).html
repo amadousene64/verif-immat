@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vérification CSU</title>
+<style>
+  :root{--bg:#f4f6f5;--card:#fff;--text:#1c2421;--muted:#66726d;--line:#e3e8e6;--brand:#0f7a4a;--brand-soft:#e6f4ec;--warn:#b54708;--warn-soft:#fef0e4;--err:#b42318;--err-soft:#fdecea}
+  @media (prefers-color-scheme:dark){:root{--bg:#121715;--card:#1b221f;--text:#e8eeeb;--muted:#9aa7a1;--line:#2a3430;--brand:#4cc38a;--brand-soft:#173327;--warn:#f5a35c;--warn-soft:#3a2614;--err:#f27a6f;--err-soft:#3b1a17}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:720px;margin:0 auto;padding:24px 16px 48px}
+  h1{font-size:22px;margin:0 0 4px}
+  .sub{color:var(--muted);margin:0 0 20px}
+  form{display:flex;gap:8px}
+  input{flex:1;min-width:0;padding:12px 14px;font-size:17px;letter-spacing:.06em;text-transform:uppercase;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text)}
+  input:focus{outline:2px solid var(--brand);border-color:transparent}
+  button{padding:12px 18px;font-size:15px;font-weight:600;border:0;border-radius:10px;background:var(--brand);color:#fff;cursor:pointer}
+  button:disabled{opacity:.6;cursor:wait}
+  .msg{margin-top:16px;padding:12px 14px;border-radius:10px}
+  .msg.err{background:var(--err-soft);color:var(--err)}
+  .card{margin-top:20px;background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .head{display:flex;gap:16px;align-items:center;padding:18px}
+  .avatar{width:84px;height:84px;border-radius:12px;background:var(--brand-soft);color:var(--brand);display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:700;flex-shrink:0;object-fit:cover}
+  .name{font-size:20px;font-weight:700;margin:0}
+  .code{color:var(--muted);font-family:ui-monospace,Menlo,monospace;font-size:13px}
+  .badges{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .badge{font-size:12px;font-weight:600;padding:3px 9px;border-radius:999px;background:var(--brand-soft);color:var(--brand)}
+  .badge.warn{background:var(--warn-soft);color:var(--warn)}
+  .badge.err{background:var(--err-soft);color:var(--err)}
+  section{border-top:1px solid var(--line);padding:14px 18px}
+  section h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0 0 10px}
+  dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px 20px;margin:0}
+  dt{font-size:12px;color:var(--muted)}
+  dd{margin:0;font-weight:500;word-break:break-word}
+  details{margin-top:12px;color:var(--muted)}
+  pre{overflow:auto;font-size:12px;background:var(--bg);padding:10px;border-radius:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Vérification bénéficiaire CSU</h1>
+  <p class="sub">Saisissez le code d'immatriculation (ex. P6204F8290) puis Entrée.</p>
+
+  <form id="f">
+    <input id="code" placeholder="Code d'immatriculation" autocomplete="off" autofocus required>
+    <button id="btn" type="submit">Rechercher</button>
+  </form>
+
+  <div id="out"></div>
+</div>
+
+<script>
+// Servie par server.js (http://localhost:3000) → passe par le relais ; ouverte en fichier → appel direct (bloqué par CORS).
+const API = location.protocol.startsWith("http")
+  ? "/api/beneficiaire?code="
+  : "https://scancarte.sunucsu.sn/api/beneficiairess/codeImmatriculation?code=";
+const $ = s => document.querySelector(s);
+const esc = v => String(v).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const val = v => (v === null || v === undefined || v === "") ? "—" : esc(v);
+const fmtDate = d => {
+  if (!d) return "—";
+  const x = new Date(d);
+  return isNaN(x) ? esc(d) : x.toLocaleDateString("fr-FR", {day:"2-digit", month:"long", year:"numeric"});
+};
+const age = d => {
+  if (!d) return "";
+  const b = new Date(d), n = new Date();
+  let a = n.getFullYear() - b.getFullYear();
+  if (n < new Date(n.getFullYear(), b.getMonth(), b.getDate())) a--;
+  return ` (${a} ans)`;
+};
+const field = (label, v) => `<div><dt>${label}</dt><dd>${v}</dd></div>`;
+
+async function chercher(code) {
+  code = code.trim().toUpperCase();
+  if (!code) return;
+  $("#btn").disabled = true;
+  $("#out").innerHTML = `<div class="msg">Recherche en cours…</div>`;
+  try {
+    const r = await fetch(API + encodeURIComponent(code), {headers: {Accept: "application/json"}});
+    if (r.status === 404) throw new Error("Aucun bénéficiaire trouvé pour ce code.");
+    if (!r.ok) throw new Error(`Erreur du serveur (${r.status}).`);
+    const txt = await r.text();
+    if (!txt.trim()) throw new Error("Aucun bénéficiaire trouvé pour ce code.");
+    const b = JSON.parse(txt);
+    if (!b || !b.nom) throw new Error("Aucun bénéficiaire trouvé pour ce code.");
+    afficher(b);
+    history.replaceState(null, "", "?code=" + encodeURIComponent(code));
+  } catch (e) {
+    const msg = e instanceof TypeError
+      ? "Impossible de joindre le serveur (connexion ou blocage CORS du navigateur)."
+      : e.message;
+    $("#out").innerHTML = `<div class="msg err">${esc(msg)}</div>`;
+  } finally {
+    $("#btn").disabled = false;
+    $("#code").select();
+  }
+}
+
+function afficher(b) {
+  const tb = b.typeBeneficiaire || {};
+  const ps = tb.paquetSoin || {};
+  const ad = b.adhesion || {};
+  const ti = b.titulaire || {};
+
+  // Validité de la couverture
+  const today = new Date().toISOString().slice(0, 10);
+  let couv;
+  if (b.dateDebutc && b.dateFinc) {
+    couv = (today >= b.dateDebutc && today <= b.dateFinc)
+      ? `<span class="badge">Couverture valide</span>`
+      : `<span class="badge err">Couverture expirée / non commencée</span>`;
+  } else couv = `<span class="badge warn">Période inconnue</span>`;
+
+  const etat = (b.etat || "").toLowerCase() === "active"
+    ? `<span class="badge">${esc(b.etat)}</span>`
+    : `<span class="badge err">${val(b.etat)}</span>`;
+  const carte = b.statutCarte ? `<span class="badge warn">Carte ${esc(b.statutCarte.toLowerCase())}</span>` : "";
+
+  // Photo éventuelle
+  const ph = b.photoBase64 || b.photo;
+  const type = b.photoContentType || "image/jpeg";
+  const avatar = ph
+    ? `<img class="avatar" alt="" src="${ph.startsWith("data:") ? esc(ph) : `data:${esc(type)};base64,${esc(ph)}`}">`
+    : `<div class="avatar">${esc((b.prenom||" ")[0] + (b.nom||" ")[0])}</div>`;
+
+  $("#out").innerHTML = `
+  <div class="card">
+    <div class="head">
+      ${avatar}
+      <div>
+        <p class="name">${val(b.prenom)} ${val(b.nom)}</p>
+        <div class="code">${val(b.codeImmatriculation)} · ${val(b.code)}</div>
+        <div class="badges">${etat}${couv}${carte}</div>
+      </div>
+    </div>
+
+    <section><h2>Identité</h2><dl>
+      ${field("Sexe", val(b.sexe))}
+      ${field("Date de naissance", fmtDate(b.dateNaissance) + age(b.dateNaissance))}
+      ${field("Lieu de naissance", val(b.lieuNaissance))}
+      ${field("Pièce", `${val(b.typePiece)} ${b.numeroPiece ? "· " + esc(b.numeroPiece) : ""}`)}
+      ${field("Téléphone", val(b.telephone))}
+      ${field("Commune", val(b.commune))}
+    </dl></section>
+
+    <section><h2>Couverture</h2><dl>
+      ${field("Type de bénéficiaire", val(tb.libelle))}
+      ${field("Paquet de soins", ps.libelle ? `${esc(ps.libelle)} · prise en charge ${val(ps.taux)} %` : "—")}
+      ${field("Début", fmtDate(b.dateDebutc))}
+      ${field("Fin", fmtDate(b.dateFinc))}
+      ${field("Cotisation", tb.montantCotisation != null ? esc(tb.montantCotisation.toLocaleString("fr-FR")) + " FCFA" : "—")}
+      ${field("Statut de la carte", val(b.statutCarte))}
+    </dl></section>
+
+    <section><h2>Adhésion</h2><dl>
+      ${field("Titulaire", `${val(ti.prenom)} ${ti.nom ? esc(ti.nom) : ""}`)}
+      ${field("Lien avec le titulaire", val(b.relation && b.relation.libelle))}
+      ${field("Ménage / groupe", val(ad.denomination))}
+      ${field("Type d'adhésion", val(ad.adhesionType))}
+      ${field("Date d'adhésion", fmtDate(ad.dateAdhesion))}
+      ${field("Cotisation payée", ad.estPaye === true ? "Oui" : ad.estPaye === false ? "Non" : "—")}
+    </dl>
+    <details><summary>Données brutes</summary><pre>${esc(JSON.stringify(b, null, 2))}</pre></details>
+    </section>
+  </div>`;
+}
+
+$("#f").addEventListener("submit", e => { e.preventDefault(); chercher($("#code").value); });
+
+// Ouvre directement un code passé dans l'URL : verif-csu.html?code=P6204F8290
+const init = new URLSearchParams(location.search).get("code");
+if (init) { $("#code").value = init; chercher(init); }
+</script>
+</body>
+</html>
